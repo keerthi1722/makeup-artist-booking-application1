@@ -32,29 +32,33 @@ function UserDashboard() {
   useEffect(() => {
     const load = async () => {
       try {
-          const aRes = await fetch(`${API}/artists`)
-          if (aRes.ok) {
-            setArtists(await aRes.json())
-          } else {
-            setArtistsError('Failed to load artists')
-          }
-        } catch {
+        const aRes = await fetch(`${API}/artists`)
+        if (aRes.ok) {
+          setArtists(await aRes.json())
+        } else {
           setArtistsError('Failed to load artists')
         }
+      } catch (err) {
+        console.error('Error loading artists:', err)
+        setArtistsError('Failed to load artists')
+      }
 
       try {
-        const email = localStorage.getItem('userEmail') || ''
-        if (email) {
-          const bRes = await fetch(`${API}/appoinment/by-user/${encodeURIComponent(email)}`)
+        // Determine the stored email from any login type (user, artist, admin)
+        const storedEmail = localStorage.getItem('userEmail') || localStorage.getItem('artistEmail') || localStorage.getItem('adminEmail') || ''
+        if (storedEmail) {
+          const bRes = await fetch(`${API}/appoinment/by-user/${encodeURIComponent(storedEmail)}`)
           if (bRes.ok) {
             setBookings(await bRes.json())
           } else {
             setBookingsError('Failed to load bookings')
           }
         } else {
+          // No email available — don't call API and show empty bookings (user should login)
           setBookings([])
         }
-      } catch {
+      } catch (err) {
+        console.error('Error loading bookings:', err)
         setBookingsError('Failed to load bookings')
       }
       setLoading(false)
