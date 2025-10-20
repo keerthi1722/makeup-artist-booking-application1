@@ -223,14 +223,23 @@ function UserDashboard() {
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
                 {artists.map(artist => (
                   <div key={artist._id} className="group bg-white rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 overflow-hidden">
-                    {artist.workImages && artist.workImages[0] && (
-                      <div className="relative overflow-hidden">
-                        <img 
-                          src={artist.workImages[0]} 
-                          alt={artist.name} 
-                          className="w-full h-48 object-cover group-hover:scale-110 transition-transform duration-300"
-                        />
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
+                    {artist.workImages && artist.workImages.length > 0 && (
+                      <div className="relative">
+                        {/* Horizontal scroll gallery for multiple images - larger display */}
+                        <div className="flex space-x-3 overflow-x-auto touch-pan-x p-3 -mx-3">
+                          {artist.workImages.map((img, idx) => (
+                            <img
+                              key={idx}
+                              src={img}
+                              alt={`${artist.name}-${idx}`}
+                              className="w-80 h-64 rounded-lg object-cover flex-shrink-0 snap-center transform transition-transform duration-300 hover:scale-105"
+                            />
+                          ))}
+                        </div>
+                        <div className="absolute inset-0 pointer-events-none">
+                          <div className="absolute left-0 top-0 bottom-0 w-12 bg-gradient-to-r from-white/90 to-transparent"></div>
+                          <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-white/90 to-transparent"></div>
+                        </div>
                       </div>
                     )}
                     <div className="p-6">
