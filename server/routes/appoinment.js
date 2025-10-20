@@ -1,19 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const path = require('path');
-const fs = require('fs'); // Import fs module
+const fs = require('fs');
 const { promisify } = require('util');
 const sleep = promisify(setTimeout);
 
-// require('../db/conn')
 const Appoinment = require('../model/appoinmentModel');
-const Wage = require('../model/wageModel'); // Adjust the path if needed
+const Wage = require('../model/wageModel');
 
 const { sendMail } = require('../controllers/sendMail');
 const { generateInvoice } = require('../controllers/easyInvoice');
 
-// List all appointments (admin)
-// For date disabling in client
+// Ensure invoices folder exists
+const invoicesDir = path.join(__dirname, '../invoices');
+if (!fs.existsSync(invoicesDir)) fs.mkdirSync(invoicesDir, { recursive: true });
+
+// List all booked dates (for date disabling)
 router.get('/booked-dates', async (req, res) => {
     try {
         const appointments = await Appoinment.find({}, 'date');
@@ -25,7 +27,7 @@ router.get('/booked-dates', async (req, res) => {
     }
 });
 
-// List all appointments (admin)
+// List all appointments
 router.get('/', async (req, res) => {
     try {
         const appointments = await Appoinment.find().sort({ date: -1 });
@@ -36,17 +38,12 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Delete appointment route
-// Delete single appointment (admin)
+// Delete appointment
 router.delete('/:id', async (req, res) => {
     try {
         const { id } = req.params;
         const appointment = await Appoinment.findByIdAndDelete(id);
-        
-        if (!appointment) {
-            return res.status(404).json({ error: 'Appointment not found' });
-        }
-        
+        if (!appointment) return res.status(404).json({ error: 'Appointment not found' });
         res.json({ message: 'Appointment deleted successfully' });
     } catch (err) {
         console.error('Error deleting appointment:', err);
@@ -57,6 +54,7 @@ router.delete('/:id', async (req, res) => {
 // Create appointment
 router.post('/', async (req, res) => {
     console.log("Appointment request received:", req.body);
+
     const { name, email, selectedServices, selectedSubServices, staff, date, totalPrice, address } = req.body;
 
     if (!name || !email || !selectedServices || !staff || !date) {
@@ -65,41 +63,41 @@ router.post('/', async (req, res) => {
     }
 
     try {
-        // allow multiple appointments per email (users may book again)
-        // Normalize inputs to safe defaults
+        // Normalize subservices
         const subServicesArray = Array.isArray(selectedSubServices) ? selectedSubServices : (selectedSubServices ? [selectedSubServices] : []);
         const formattedSubServices = subServicesArray.map(subService => {
-            // subService expected as 'Name:price' string
-            if (typeof subService !== 'string') return { name: String(subService), price: 0 };
-            const [sname, price] = subService.split(':');
-            return { name: sname || '', price: parseFloat(price) || 0 };
+            if (typeof subService === 'string') {
+                const [sname, price] = subService.split(':');
+                return { name: sname?.trim() || '', price: parseFloat(price) || 0 };
+            }
+            return { name: String(subService), price: 0 };
         });
 
+        // Normalize services
         const normalizedServices = Array.isArray(selectedServices) ? selectedServices : (selectedServices ? [selectedServices] : []);
         const parsedTotalPrice = Number(String(totalPrice || 0).replace(/[^0-9.-]+/g, '')) || 0;
 
+        // Save appointment
         const user = new Appoinment({
             name,
             email,
             selectedServices: normalizedServices,
             selectedSubServices: formattedSubServices,
             staff,
-            date,
+            date: new Date(date),
             address: address || '',
             totalPrice: parsedTotalPrice
         });
-
         await user.save();
 
+        // Save wage
         const wageAmount = parsedTotalPrice * 0.5;
-
-        // Save wage details for the staff
         const wage = new Wage({
             staffName: staff,
             clientName: name,
-            service: Array.isArray(selectedServices) ? selectedServices : [selectedServices], // Ensure it's always an array
+            service: normalizedServices,
             subServices: formattedSubServices,
-            date,
+            date: new Date(date),
             clientAddress: address || '',
             totalPrice: parsedTotalPrice,
             wage: wageAmount
@@ -107,20 +105,16 @@ router.post('/', async (req, res) => {
         await wage.save();
         console.log("Wage saved:", wage);
 
+        // Sanitize filename
+        const safeName = name.replace(/[^a-z0-9]/gi, '_');
+        const filePath = path.join(invoicesDir, `invoice_${Date.now()}_${safeName}.pdf`);
 
-        // Define the file path correctly
-        const filePath = path.join(__dirname, `../invoices/invoice_${Date.now()}_${name.replace(/\s+/g, '_')}.pdf`);
-        console.log(`Attempting to read file at: ${filePath}`);
-
-        
-        // Try to generate invoice and send emails, but don't fail the entire request if they error
+        // Generate invoice and send emails
         try {
-            // Generate the invoice (best-effort)
-            await generateInvoice(name, [{ name: normalizedServices, selectedSubServices: formattedSubServices, staff: staff, price: parsedTotalPrice }], filePath);
-
+            await generateInvoice(name, [{ name: normalizedServices, selectedSubServices: formattedSubServices, staff, price: parsedTotalPrice }], filePath);
             await sleep(1000);
 
-            // Send the email to client with the invoice (best-effort)
+            // Send to client
             try {
                 await sendMail(email, "Appointment Confirmation",
                     `${name}, your appointment is booked on ${date} for service ${JSON.stringify(formattedSubServices)}.`,
@@ -131,7 +125,7 @@ router.post('/', async (req, res) => {
                 console.error('Failed to send appointment email to client:', mailErr);
             }
 
-            // Notify the artist (without attachment)
+            // Notify artist/staff
             try {
                 await sendMail(process.env.ARTIST_NOTIFY_EMAIL || process.env.EMAIL, "New Booking Request",
                     `New booking for ${staff} by ${name} on ${date}. Services: ${JSON.stringify(formattedSubServices)}. Total: ${parsedTotalPrice}`,
@@ -140,21 +134,19 @@ router.post('/', async (req, res) => {
             } catch (notifyErr) {
                 console.error('Failed to notify artist email:', notifyErr);
             }
+
         } catch (errInvoice) {
             console.error('Invoice generation / email sending error (non-fatal):', errInvoice);
         }
 
         res.status(201).json({ message: "Appointment booked (email/invoice sent if available)" });
 
-        // Optionally, delete the invoice file after sending
-       
-
-       
-
-
-        fs.unlink(filePath, (err) => {
-            if (err) console.error(`Failed to delete file: ${filePath}`, err);
-        });
+        // Delete invoice file safely
+        try {
+            await fs.promises.unlink(filePath);
+        } catch (err) {
+            console.error(`Failed to delete invoice file: ${filePath}`, err);
+        }
 
     } catch (err) {
         console.error("Appointment creation error:", err);
@@ -165,45 +157,45 @@ router.post('/', async (req, res) => {
 // Accept appointment
 router.patch('/:id/accept', async (req, res) => {
     try {
-        const { id } = req.params
-        const appt = await Appoinment.findByIdAndUpdate(id, { status: 'accepted' }, { new: true })
-        if (!appt) return res.status(404).json({ error: 'Appointment not found' })
-        res.json(appt)
+        const { id } = req.params;
+        const appt = await Appoinment.findByIdAndUpdate(id, { status: 'accepted' }, { new: true });
+        if (!appt) return res.status(404).json({ error: 'Appointment not found' });
+        res.json(appt);
     } catch (err) {
-        res.status(500).json({ error: 'Internal server error' })
+        res.status(500).json({ error: 'Internal server error' });
     }
-})
+});
 
 // Reject appointment
 router.patch('/:id/reject', async (req, res) => {
     try {
-        const { id } = req.params
-        const appt = await Appoinment.findByIdAndUpdate(id, { status: 'rejected' }, { new: true })
-        if (!appt) return res.status(404).json({ error: 'Appointment not found' })
-        res.json(appt)
+        const { id } = req.params;
+        const appt = await Appoinment.findByIdAndUpdate(id, { status: 'rejected' }, { new: true });
+        if (!appt) return res.status(404).json({ error: 'Appointment not found' });
+        res.json(appt);
     } catch (err) {
-        res.status(500).json({ error: 'Internal server error' })
+        res.status(500).json({ error: 'Internal server error' });
     }
-})
+});
 
-// List by artist (staff)
+// List by staff
 router.get('/by-staff/:name', async (req, res) => {
     try {
-        const list = await Appoinment.find({ staff: req.params.name }).sort({ date: -1 })
-        res.json(list)
+        const list = await Appoinment.find({ staff: req.params.name }).sort({ date: -1 });
+        res.json(list);
     } catch (err) {
-        res.status(500).json({ error: 'Internal server error' })
+        res.status(500).json({ error: 'Internal server error' });
     }
-})
+});
 
 // List by user email
 router.get('/by-user/:email', async (req, res) => {
     try {
-        const list = await Appoinment.find({ email: req.params.email }).sort({ date: -1 })
-        res.json(list)
+        const list = await Appoinment.find({ email: req.params.email }).sort({ date: -1 });
+        res.json(list);
     } catch (err) {
-        res.status(500).json({ error: 'Internal server error' })
+        res.status(500).json({ error: 'Internal server error' });
     }
-})
+});
 
 module.exports = router;
