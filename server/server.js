@@ -12,7 +12,8 @@ const port = process.env.PORT || 5000
 
 
 // CORS origins can be configured via environment variable (comma-separated)
-const defaultOrigins = ['http://localhost:5173', 'http://localhost:5174']
+// Include the deployed frontend URL so the server accepts requests from the Vercel client by default
+const defaultOrigins = ['http://localhost:5173', 'http://localhost:5174', 'https://makeup-artist-booking-application1.vercel.app']
 const envOrigins = process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()) : []
 const allowedOrigins = envOrigins.length > 0 ? envOrigins : defaultOrigins
 
